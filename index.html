@@ -1,6 +1,36 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- Firebase SDKs -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, setDoc, getDoc, collection, addDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDmf6QlJ3wj-_7sDkQwWGga6PWHtKKfW2o",
+  authDomain: "homeglow-ba060.firebaseapp.com",
+  projectId: "homeglow-ba060",
+  storageBucket: "homeglow-ba060.firebasestorage.app",
+  messagingSenderId: "390664487929",
+  appId: "1:390664487929:web:5eb3e03b3b660bf5003328"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  // Example: Write
+  await addDoc(collection(db, "orders"), {
+    item: "Sofa",
+    status: "pending",
+    timestamp: new Date()
+  });
+
+  // Example: Read a document
+  const docSnap = await getDoc(doc(db, "orders", "DOCUMENT_ID"));
+  if (docSnap.exists()) {
+    console.log(docSnap.data());
+  }
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HomeGlow — Inventory</title>
@@ -256,14 +286,6 @@ th.cb-col, td.cb-col { width: 36px; padding-left: 14px; padding-right: 4px; }
 tr.selected td { background: #fceaea !important; }
 </style>
 </head>
-const firebaseConfig = {
-  apiKey: "AIzaSyDmf6QlJ3wj-_7sDkQwWGga6PWHtKKfW2o",
-  authDomain: "homeglow-ba060.firebaseapp.com",
-  projectId: "homeglow-ba060",
-  storageBucket: "homeglow-ba060.firebasestorage.app",
-  messagingSenderId: "390664487929",
-  appId: "1:390664487929:web:5eb3e03b3b660bf5003328"
-};
 <body>
 
 <!-- ═══════════════════════════════════ LOGIN ═══════════════════════════════════ -->
