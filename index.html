@@ -2,34 +2,20 @@
 <html lang="en">
 <head>
 <!-- Firebase SDKs -->
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, doc, setDoc, getDoc, collection, addDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
+<!-- Firebase SDK (loaded as classic scripts so the rest of the page can use them) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
   const firebaseConfig = {
     apiKey: "AIzaSyDmf6QlJ3wj-_7sDkQwWGga6PWHtKKfW2o",
-  authDomain: "homeglow-ba060.firebaseapp.com",
-  projectId: "homeglow-ba060",
-  storageBucket: "homeglow-ba060.firebasestorage.app",
-  messagingSenderId: "390664487929",
-  appId: "1:390664487929:web:5eb3e03b3b660bf5003328"
+    authDomain: "homeglow-ba060.firebaseapp.com",
+    projectId: "homeglow-ba060",
+    storageBucket: "homeglow-ba060.firebasestorage.app",
+    messagingSenderId: "390664487929",
+    appId: "1:390664487929:web:5eb3e03b3b660bf5003328"
   };
-
-  const app = initializeApp(firebaseConfig);
-  const db = getFirestore(app);
-
-  // Example: Write
-  await addDoc(collection(db, "orders"), {
-    item: "Sofa",
-    status: "pending",
-    timestamp: new Date()
-  });
-
-  // Example: Read a document
-  const docSnap = await getDoc(doc(db, "orders", "DOCUMENT_ID"));
-  if (docSnap.exists()) {
-    console.log(docSnap.data());
-  }
+  firebase.initializeApp(firebaseConfig);
+  const _db = firebase.firestore();
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -679,23 +665,62 @@ tr.selected td { background: #fceaea !important; }
 
 <script>
 // ═══════════════════════════════════════════════════════════
-//  DATA STORE  (localStorage persistence)
+//  DATA STORE  (Firestore — syncs across all devices)
 // ═══════════════════════════════════════════════════════════
+
+// In-memory cache so renders are instant after first load
+const _cache = {};
+
 const DB = {
-  get(k){ try{ return JSON.parse(localStorage.getItem('hg_'+k)); }catch{ return null; } },
-  set(k,v){ localStorage.setItem('hg_'+k, JSON.stringify(v)); }
+  async get(k){
+    if(_cache[k] !== undefined) return _cache[k];
+    const snap = await _db.collection('hg_store').doc(k).get();
+    const val = snap.exists ? snap.data().value : null;
+    _cache[k] = val;
+    return val;
+  },
+  async set(k, v){
+    _cache[k] = v;
+    await _db.collection('hg_store').doc(k).set({ value: v });
+  }
 };
 
-function loadData(){
-  if(!DB.get('staff')){
-    DB.set('staff',[
+// Real-time listeners — update cache + re-render whenever Firestore changes
+function startListeners(){
+  ['products','sales','staff'].forEach(k => {
+    _db.collection('hg_store').doc(k).onSnapshot(snap => {
+      if(!snap.exists) return;
+      _cache[k] = snap.data().value;
+      // Re-render whichever page is currently visible
+      const active = document.querySelector('.page:not(.hidden)');
+      if(!active) return;
+      const id = active.id.replace('page-','');
+      if(id==='dashboard') renderDashboard();
+      if(id==='inventory') renderInventory();
+      if(id==='products') renderProducts();
+      if(id==='staff') renderStaff();
+      if(id==='reports') renderReports();
+      if(id==='restock') renderRestockTable();
+      if(id==='sales') populateLoginDropdown();
+    });
+  });
+}
+
+async function loadData(){
+  // Show a loading indicator
+  document.getElementById('login-screen').innerHTML += '<p id="loading-msg" style="text-align:center;color:var(--text3);font-size:13px;margin-top:12px">Connecting to database…</p>';
+
+  const staff = await DB.get('staff');
+  if(!staff){
+    await DB.set('staff',[
       {id:1, name:'Admin (You)', role:'admin', pin:'1234'},
       {id:2, name:'Ravi Kumar', role:'staff', pin:'2222'},
       {id:3, name:'Priya Singh', role:'staff', pin:'3333'},
     ]);
   }
-  if(!DB.get('products')){
-    DB.set('products',[
+  const products = await DB.get('products');
+  if(!products){
+    await DB.set('products',[
       {sku:'BED-RH-KG-BLU', cat:'Bedsheet', brand:'Raymond Home', name:'Cotton Bedsheet', v1:'King', v2:'Blue', mrp:1499, cost:900, stock:18, reorder:5},
       {sku:'BED-RH-QN-WHT', cat:'Bedsheet', brand:'Raymond Home', name:'Cotton Bedsheet', v1:'Queen', v2:'White', mrp:1299, cost:780, stock:4, reorder:5},
       {sku:'BED-SP-DB-GRN', cat:'Bedsheet', brand:'Spaces', name:'Floral Bedsheet', v1:'Double', v2:'Green', mrp:999, cost:600, stock:0, reorder:5},
@@ -710,15 +735,22 @@ function loadData(){
       {sku:'BLK-WS-DB-IVR', cat:'Blanket', brand:'Welspun', name:'Fleece Blanket', v1:'Double', v2:'Ivory', mrp:1899, cost:1100, stock:7, reorder:4},
     ]);
   }
-  if(!DB.get('sales')) DB.set('sales',[]);
+  if(!await DB.get('sales')) await DB.set('sales',[]);
+
+  // Remove loading message
+  const msg = document.getElementById('loading-msg');
+  if(msg) msg.remove();
+
+  // Start real-time sync
+  startListeners();
 }
 
 // ═══════════════════════ AUTH ═══════════════════════
 let currentUser = null;
 let saleItems = [];
 
-function populateLoginDropdown(){
-  const staff = DB.get('staff')||[];
+async function populateLoginDropdown(){
+  const staff = await DB.get('staff')||[];
   const sel = document.getElementById('login-user');
   sel.innerHTML = '<option value="">— Choose staff —</option>';
   staff.forEach(s => {
@@ -728,10 +760,10 @@ function populateLoginDropdown(){
   });
 }
 
-function doLogin(){
+async function doLogin(){
   const uid = document.getElementById('login-user').value;
   const pin = ['p0','p1','p2','p3'].map(id=>document.getElementById(id).value).join('');
-  const staff = DB.get('staff')||[];
+  const staff = await DB.get('staff')||[];
   const user = staff.find(s=>s.id==uid && s.pin===pin);
   const err = document.getElementById('login-err');
   if(!user){ err.style.display='block'; return; }
@@ -809,9 +841,9 @@ function suggestSKU(){
 });
 
 // ═══════════════════════ DASHBOARD ═══════════════════════
-function renderDashboard(){
-  const products = DB.get('products')||[];
-  const sales = DB.get('sales')||[];
+async function renderDashboard(){
+  const products = await DB.get('products')||[];
+  const sales = await DB.get('sales')||[];
   const tod = today();
   const todaySales = sales.filter(s=>s.date===tod);
   const todayRev = todaySales.reduce((a,s)=>a+s.mrp*s.qty,0);
@@ -855,10 +887,10 @@ function renderDashboard(){
 }
 
 // ═══════════════════════ SALES ═══════════════════════
-function addSaleItem(){
+async function addSaleItem(){
   const sku = document.getElementById('sale-sku-input').value.trim().toUpperCase();
   const qty = parseInt(document.getElementById('sale-qty-input').value)||1;
-  const products = DB.get('products')||[];
+  const products = await DB.get('products')||[];
   const prod = products.find(p=>p.sku===sku);
   const hint = document.getElementById('sale-sku-hint');
   if(!prod){ hint.innerHTML='<span style="color:var(--danger)">SKU not found. Check the code and try again.</span>'; return; }
@@ -902,27 +934,27 @@ function changeQty(i,delta){
 function removeSaleItem(i){ saleItems.splice(i,1); renderSaleItems(); }
 function clearSale(){ saleItems=[]; renderSaleItems(); document.getElementById('sale-sku-hint').innerHTML=''; }
 
-function confirmSale(){
+async function confirmSale(){
   if(saleItems.length===0){ toast('Add at least one item first.'); return; }
-  const products = DB.get('products')||[];
-  const sales = DB.get('sales')||[];
+  const products = await DB.get('products')||[];
+  const sales = await DB.get('sales')||[];
   const tod = today();
   saleItems.forEach(item=>{
     const prod = products.find(p=>p.sku===item.sku);
     if(prod){ prod.stock = Math.max(0, prod.stock-item.qty); }
     sales.push({date:tod, sku:item.sku, productName:item.productName, qty:item.qty, mrp:item.mrp, cost:item.cost, staff:currentUser.name});
   });
-  DB.set('products', products);
-  DB.set('sales', sales);
+  await DB.set('products', products);
+  await DB.set('sales', sales);
   const total = saleItems.reduce((a,i)=>a+i.mrp*i.qty,0);
   toast(`Sale of ${fmt(total)} confirmed!`, 'green');
   clearSale();
 }
 
 // Live SKU hint
-document.getElementById('sale-sku-input').addEventListener('input', function(){
+document.getElementById('sale-sku-input').addEventListener('input', async function(){
   const sku = this.value.toUpperCase().trim();
-  const products = DB.get('products')||[];
+  const products = await DB.get('products')||[];
   const prod = products.find(p=>p.sku===sku);
   const hint = document.getElementById('sale-sku-hint');
   if(prod) hint.innerHTML=`<span style="color:var(--accent2)">✓ ${prod.brand} ${prod.name} — ${prod.v1} · ${prod.v2} — ${fmt(prod.mrp)} — ${prod.stock} in stock</span>`;
@@ -931,24 +963,24 @@ document.getElementById('sale-sku-input').addEventListener('input', function(){
 });
 
 // ═══════════════════════ RESTOCK ═══════════════════════
-function showRestockInfo(){
+async function showRestockInfo(){
   const sku = document.getElementById('restock-sku').value.toUpperCase().trim();
-  const products = DB.get('products')||[];
+  const products = await DB.get('products')||[];
   const prod = products.find(p=>p.sku===sku);
   const el = document.getElementById('restock-info');
   if(prod){ el.style.display='block'; el.textContent=`Found: ${prod.brand} ${prod.name} — ${prod.v1} · ${prod.v2} — Current stock: ${prod.stock} units`; }
   else el.style.display='none';
 }
 
-function doRestock(){
+async function doRestock(){
   const sku = document.getElementById('restock-sku').value.toUpperCase().trim();
   const qty = parseInt(document.getElementById('restock-qty').value)||0;
   if(!sku||qty<1){ toast('Enter a valid SKU and quantity.'); return; }
-  const products = DB.get('products')||[];
+  const products = await DB.get('products')||[];
   const prod = products.find(p=>p.sku===sku);
   if(!prod){ toast('SKU not found.'); return; }
   prod.stock+=qty;
-  DB.set('products',products);
+  await DB.set('products',products);
   toast(`Added ${qty} units to ${prod.brand} ${prod.name}`, 'green');
   document.getElementById('restock-sku').value='';
   document.getElementById('restock-qty').value='1';
@@ -956,8 +988,8 @@ function doRestock(){
   renderRestockTable();
 }
 
-function renderRestockTable(){
-  const products = DB.get('products')||[];
+async function renderRestockTable(){
+  const products = await DB.get('products')||[];
   const low = products.filter(p=>p.stock<=p.reorder);
   const tbody = document.getElementById('restock-table');
   if(low.length===0){ tbody.innerHTML='<tr><td colspan="6" style="color:var(--text3);text-align:center;padding:20px">No low-stock items.</td></tr>'; return; }
@@ -980,8 +1012,8 @@ function quickRestock(sku){
 }
 
 // ═══════════════════════ INVENTORY ═══════════════════════
-function renderInventory(){
-  const products = DB.get('products')||[];
+async function renderInventory(){
+  const products = await DB.get('products')||[];
   const search = (document.getElementById('inv-search').value||'').toLowerCase();
   const cat = document.getElementById('inv-cat-filter').value;
   const status = document.getElementById('inv-status-filter').value;
@@ -1066,19 +1098,19 @@ function clearProductSelection(){
   updateBulkBar();
 }
 
-function bulkDeleteSelected(){
+async function bulkDeleteSelected(){
   if(selectedSkus.size===0) return;
   if(!confirm(`Permanently delete ${selectedSkus.size} product(s)? This cannot be undone.`)) return;
-  let products = DB.get('products')||[];
+  let products = await DB.get('products')||[];
   products = products.filter(p=>!selectedSkus.has(p.sku));
-  DB.set('products', products);
+  await DB.set('products', products);
   toast(`${selectedSkus.size} product(s) deleted`, 'orange');
   selectedSkus.clear();
   renderProducts();
 }
 
-function renderProducts(){
-  const products = DB.get('products')||[];
+async function renderProducts(){
+  const products = await DB.get('products')||[];
   const search = (document.getElementById('prod-search').value||'').toLowerCase();
   const cat = document.getElementById('prod-cat-filter').value;
   const cats = [...new Set(products.map(p=>p.cat))];
@@ -1109,16 +1141,16 @@ function renderProducts(){
 
 function openAddProduct(){ openModal('modal-add-product'); }
 
-function saveProduct(){
+async function saveProduct(){
   const fields = {cat:'np-cat',brand:'np-brand',name:'np-name',v1:'np-v1',v2:'np-v2',mrp:'np-mrp',cost:'np-cost',stock:'np-stock',reorder:'np-reorder',sku:'np-sku'};
   const vals = {};
   for(const [k,id] of Object.entries(fields)) vals[k]=document.getElementById(id).value.trim();
   const err = document.getElementById('prod-err');
   if(!vals.cat||!vals.brand||!vals.name||!vals.sku||!vals.mrp){ err.style.display='block'; err.textContent='Please fill in all required fields.'; return; }
-  const products = DB.get('products')||[];
+  const products = await DB.get('products')||[];
   if(products.find(p=>p.sku===vals.sku.toUpperCase())){ err.style.display='block'; err.textContent='This SKU already exists.'; return; }
   products.push({sku:vals.sku.toUpperCase(),cat:vals.cat,brand:vals.brand,name:vals.name,v1:vals.v1,v2:vals.v2,mrp:parseFloat(vals.mrp)||0,cost:parseFloat(vals.cost)||0,stock:parseInt(vals.stock)||0,reorder:parseInt(vals.reorder)||5});
-  DB.set('products',products);
+  await DB.set('products',products);
   closeModal('modal-add-product');
   toast('Product added!','green');
   renderProducts();
@@ -1127,8 +1159,8 @@ function saveProduct(){
 }
 
 let editingSKU = null;
-function openEditProduct(sku){
-  const products = DB.get('products')||[];
+async function openEditProduct(sku){
+  const products = await DB.get('products')||[];
   const p = products.find(x=>x.sku===sku);
   if(!p)return;
   editingSKU=sku;
@@ -1139,31 +1171,31 @@ function openEditProduct(sku){
   document.getElementById('ep-reorder').value=p.reorder;
   openModal('modal-edit-product');
 }
-function saveEditProduct(){
-  const products = DB.get('products')||[];
+async function saveEditProduct(){
+  const products = await DB.get('products')||[];
   const p = products.find(x=>x.sku===editingSKU);
   if(!p)return;
   p.mrp=parseFloat(document.getElementById('ep-mrp').value)||p.mrp;
   p.cost=parseFloat(document.getElementById('ep-cost').value)||p.cost;
   p.stock=parseInt(document.getElementById('ep-stock').value)||0;
   p.reorder=parseInt(document.getElementById('ep-reorder').value)||p.reorder;
-  DB.set('products',products);
+  await DB.set('products',products);
   closeModal('modal-edit-product');
   toast('Changes saved','green');
   renderProducts();
 }
-function deleteProduct(sku){
+async function deleteProduct(sku){
   if(!confirm(`Delete SKU ${sku}? This cannot be undone.`))return;
-  let products = DB.get('products')||[];
+  let products = await DB.get('products')||[];
   products = products.filter(p=>p.sku!==sku);
-  DB.set('products',products);
+  await DB.set('products',products);
   toast('SKU deleted','orange');
   renderProducts();
 }
 
 // ═══════════════════════ STAFF (admin) ═══════════════════════
-function renderStaff(){
-  const staff = DB.get('staff')||[];
+async function renderStaff(){
+  const staff = await DB.get('staff')||[];
   const tbody = document.getElementById('staff-table');
   tbody.innerHTML = staff.map(s=>`
     <tr>
@@ -1177,17 +1209,17 @@ function renderStaff(){
 }
 
 function openAddStaff(){ openModal('modal-add-staff'); }
-function saveStaff(){
+async function saveStaff(){
   const name = document.getElementById('ns-name').value.trim();
   const role = document.getElementById('ns-role').value;
   const pin = ['sp0','sp1','sp2','sp3'].map(id=>document.getElementById(id).value).join('');
   const err = document.getElementById('staff-err');
   if(!name){ err.style.display='block'; err.textContent='Enter a name.'; return; }
   if(pin.length!==4||!/^\d{4}$/.test(pin)){ err.style.display='block'; err.textContent='Enter a valid 4-digit PIN.'; return; }
-  const staff = DB.get('staff')||[];
+  const staff = await DB.get('staff')||[];
   const newId = Math.max(...staff.map(s=>s.id))+1;
   staff.push({id:newId,name,role,pin});
-  DB.set('staff',staff);
+  await DB.set('staff',staff);
   populateLoginDropdown();
   closeModal('modal-add-staff');
   toast('Staff member added!','green');
@@ -1196,11 +1228,11 @@ function saveStaff(){
   ['sp0','sp1','sp2','sp3'].forEach(id=>document.getElementById(id).value='');
   err.style.display='none';
 }
-function deleteStaff(id){
+async function deleteStaff(id){
   if(!confirm('Remove this staff member?'))return;
-  let staff = DB.get('staff')||[];
+  let staff = await DB.get('staff')||[];
   staff = staff.filter(s=>s.id!==id);
-  DB.set('staff',staff);
+  await DB.set('staff',staff);
   populateLoginDropdown();
   renderStaff();
   toast('Staff removed','orange');
@@ -1214,10 +1246,10 @@ function deleteStaff(id){
 });
 
 // ═══════════════════════ REPORTS ═══════════════════════
-function renderReports(){
+async function renderReports(){
   const range = document.getElementById('report-range').value;
-  const sales = DB.get('sales')||[];
-  const products = DB.get('products')||[];
+  const sales = await DB.get('sales')||[];
+  const products = await DB.get('products')||[];
   const tod = today();
   const now = new Date();
   const filtered = sales.filter(s=>{
@@ -1335,12 +1367,12 @@ document.addEventListener('keydown', function(e){
 });
 
 // Scan-to-restock: add 1 unit immediately, show toast with product name
-function scanRestockItem(sku){
-  const products = DB.get('products')||[];
+async function scanRestockItem(sku){
+  const products = await DB.get('products')||[];
   const prod = products.find(p=>p.sku===sku);
   if(!prod){ toast(`SKU not found: ${sku}`, ''); return; }
   prod.stock += 1;
-  DB.set('products', products);
+  await DB.set('products', products);
   toast(`+1 unit → ${prod.brand} ${prod.name} (now ${prod.stock})`, 'green');
   // If the restock SKU field happens to match, refresh its hint
   const restockSkuEl = document.getElementById('restock-sku');
@@ -1399,7 +1431,7 @@ function handleBulkFile(file){
 
   if(ext === 'csv'){
     const reader = new FileReader();
-    reader.onload = (e) => parseBulkCSV(e.target.result);
+    reader.onload = async (e) => { await parseBulkCSV(e.target.result); };
     reader.readAsText(file);
   } else if(ext === 'xlsx'){
     const reader = new FileReader();
@@ -1410,36 +1442,36 @@ function handleBulkFile(file){
   }
 }
 
-function parseBulkCSV(text){
+async function parseBulkCSV(text){
   const lines = text.trim().split('\n').filter(l=>l.trim());
   const rows = lines.slice(1).map(l => l.split(',').map(c=>c.trim().replace(/^"|"$/g,'')));
-  processBulkRows(rows);
+  await processBulkRows(rows);
 }
 
-function parseBulkXLSX(buffer){
+async function parseBulkXLSX(buffer){
   // Use SheetJS via CDN
   if(typeof XLSX === 'undefined'){
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-    script.onload = () => {
+    script.onload = async () => {
       const wb = XLSX.read(buffer, {type:'arraybuffer'});
       const ws = wb.Sheets[wb.SheetNames[0]];
       const data = XLSX.utils.sheet_to_json(ws, {header:1});
-      processBulkRows(data.slice(1));
+      await processBulkRows(data.slice(1));
     };
     document.head.appendChild(script);
   } else {
     const wb = XLSX.read(buffer, {type:'arraybuffer'});
     const ws = wb.Sheets[wb.SheetNames[0]];
     const data = XLSX.utils.sheet_to_json(ws, {header:1});
-    processBulkRows(data.slice(1));
+    await processBulkRows(data.slice(1));
   }
 }
 
-function processBulkRows(rows){
+async function processBulkRows(rows){
   const err = document.getElementById('bulk-err');
   bulkParsedRows = [];
-  const products = DB.get('products')||[];
+  const products = await DB.get('products')||[];
   const existingCodes = new Set(products.map(p=>p.sku));
   let skipped = 0;
 
@@ -1480,10 +1512,10 @@ function processBulkRows(rows){
   document.getElementById('bulk-import-btn').style.display='inline-flex';
 }
 
-function confirmBulkImport(){
-  const products = DB.get('products')||[];
+async function confirmBulkImport(){
+  const products = await DB.get('products')||[];
   bulkParsedRows.forEach(p => products.push(p));
-  DB.set('products', products);
+  await DB.set('products', products);
   closeModal('modal-bulk-import');
   resetBulkImport();
   toast(`${bulkParsedRows.length} products imported!`, 'green');
@@ -1492,8 +1524,8 @@ function confirmBulkImport(){
 }
 
 // ═══════════════════════ RESET SALES ═══════════════════════
-function confirmResetSales(){
-  DB.set('sales', []);
+async function confirmResetSales(){
+  await DB.set('sales', []);
   closeModal('modal-reset-sales');
   document.getElementById('reset-confirm-input').value = '';
   document.getElementById('confirm-reset-btn').disabled = true;
@@ -1503,8 +1535,7 @@ function confirmResetSales(){
 }
 
 // ═══════════════════════ INIT ═══════════════════════
-loadData();
-populateLoginDropdown();
+loadData().then(() => populateLoginDropdown());
 
 </script>
 </body>
